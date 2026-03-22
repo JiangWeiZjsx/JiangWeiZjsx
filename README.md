@@ -13,7 +13,7 @@
 
 ### Lab Notes (科研笔记)
 
-* 📓 **[Lab Notes (笔记)](https://github.com/JiangWeiZjsx/lab-notes)** - Daily research logs, literature reviews, and technical insights.
+* 📓 **[Lab Notes (笔记)](https://github.com/JiangWeiZjsx/lab-notes/lab-notes.md)** - Daily research logs, literature reviews, and technical insights.
 
 ### Main Publications (主要代表作)
 
