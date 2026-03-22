@@ -1,8 +1,8 @@
 # 研究笔记 (Research Notes)
 
-- 📚 **lab-coding**：编程环境与开发配置
-- 📝 **lab-paper**：论文写作与排版配置
-- 🧪 **lab-openfoam**：OpenFOAM 相关实验与笔记
+- 📚 **[componets](./componets/)**：相关辅助配置文件
+- 📝 **[lab-docker](./lab-docker.md)**：docker 配置教程
+- 🧪 **[OpenFoam](./OpenFoam/)**：OpenFOAM 相关实验与笔记
 
 # 研究工具
 
