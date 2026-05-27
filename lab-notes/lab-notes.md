@@ -1,7 +1,7 @@
 # 研究笔记 (Research Notes)
 
 - 📚 **[componets](./componets/)**：相关辅助配置文件
-- 📝 **[lab-docker](./lab-docker.md)**：docker 配置教程
+- 📝 **[lab-docker](./lab-code.md)**：docker 配置教程
 - 🧪 **[OpenFoam](./OpenFoam/)**：OpenFOAM 相关实验与笔记
 
 # 研究工具
