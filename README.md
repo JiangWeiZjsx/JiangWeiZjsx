@@ -8,14 +8,31 @@
 
 ---
 
-### Academic Achievements (学术归档)
+### Project Directories (项目目录)
 
-* 📜 **[Publications (论文)](./academic.md)** - Selected research papers on Fault Diagnosis & Emergency Management.
-* 💻 **[Research Codebase (代码)](./Code/README.md)** - Official implementations and reproducible code for my published works.
+<!-- - 📜 **[Profile (档案)](./Profile/)**  
+  Selected research papers on Fault Diagnosis & Emergency Management.
 
-### Lab Notes (科研笔记)
+- 💻 **[Codebase (代码)](./Code/README.md)**  
+  Official implementations and reproducible code for published works.
 
-* 📓 **[Lab Notes (笔记)](./Notes/)** - Daily research logs, literature reviews, and technical insights.
+- 📓 **[Notes (笔记)](./Notes/)**  
+  Daily research logs, literature reviews, and technical insights.
+
+- 🔧 **[Tools (工具)](./Tools/README.md)**  
+  Utility tools for academic workflow.
+
+- 🔌 **[Extensions (扩展)](./Extensions/README.md)**  
+  Plugin extensions and configuration files. -->
+
+| 项目名称 | 具体内容 |
+| ---- | ---- |
+|📜 [Profile (档案)](./Profile/) | Selected research papers on Fault Diagnosis & Emergency Management. |
+|💻 [Codebase (代码)](./Code/README.md) | Official implementations and reproducible code for published works (OpenFOAM examples, etc.). |
+|📓 [Notes (笔记)](./Notes/) | Daily research logs, literature reviews, and technical insights. |
+|🔧 [Tools (工具)](./Tools/README.md) | Utility tools for academic workflow (LaTeX to Word conversion, etc.). |
+|🔌 [Extensions (扩展)](./Extensions/README.md) | Plugin extensions and configuration files (Zotero, CSL styles, etc.). |
+
 
 ### Main Publications (主要代表作)
 
