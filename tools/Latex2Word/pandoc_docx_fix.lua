@@ -2,10 +2,13 @@ local author_lookup = {}
 local label_map = {}
 local section_counters = {}
 local algorithm_entries = {}
+local table_entries = {}
 local figure_counter = 0
 local table_counter = 0
 local equation_counter = 0
 local algorithm_counter = 0
+local algorithm_start_marker = "CODXALGSTART"
+local algorithm_end_marker = "CODXALGEND"
 
 local function trim(text)
   if not text then
@@ -290,6 +293,208 @@ local function transform_citet(cite)
   return result
 end
 
+local function latex_snippet_to_inlines(text)
+  local snippet = trim(text or "")
+  if snippet == "" then
+    return pandoc.List()
+  end
+
+  local ok, parsed = pcall(pandoc.read, snippet, "latex")
+  if ok and parsed and parsed.blocks and #parsed.blocks > 0 then
+    local first = parsed.blocks[1]
+    if first.t == "Para" or first.t == "Plain" then
+      return first.content
+    end
+  end
+
+  local fallback = pandoc.List()
+  fallback:insert(pandoc.Str(latex_to_text(snippet)))
+  return fallback
+end
+
+local function append_inlines(target, source)
+  for _, inline in ipairs(source) do
+    target:insert(inline)
+  end
+end
+
+local function make_algorithm_paragraph(indent, prefix, text, strong_prefix)
+  local inlines = pandoc.List()
+  if indent > 0 then
+    inlines:insert(pandoc.Str(string.rep(utf8.char(160), indent * 4)))
+  end
+
+  if prefix and prefix ~= "" then
+    if strong_prefix then
+      inlines:insert(pandoc.Strong({ pandoc.Str(prefix) }))
+    else
+      inlines:insert(pandoc.Str(prefix))
+    end
+    if text and text ~= "" then
+      inlines:insert(pandoc.Space())
+    end
+  end
+
+  append_inlines(inlines, latex_snippet_to_inlines(text))
+  return pandoc.Para(inlines)
+end
+
+local function build_algorithm_blocks(entry, number)
+  local blocks = pandoc.List()
+  local caption_text = "Algorithm " .. number
+  if entry.caption and entry.caption ~= "" then
+    caption_text = caption_text .. ". " .. entry.caption
+  end
+
+  blocks:insert(pandoc.Para({ pandoc.Str(algorithm_start_marker) }))
+  blocks:insert(pandoc.Para({ pandoc.Strong({ pandoc.Str(caption_text) }) }))
+
+  for _, line in ipairs(entry.lines or {}) do
+    if line.kind == "input" then
+      blocks:insert(make_algorithm_paragraph(0, "Input:", line.text, true))
+    elseif line.kind == "output" then
+      blocks:insert(make_algorithm_paragraph(0, "Output:", line.text, true))
+    elseif line.kind == "elseif" then
+      blocks:insert(make_algorithm_paragraph(line.indent, "Else if", line.text .. " then", false))
+    elseif line.kind == "else" then
+      blocks:insert(make_algorithm_paragraph(line.indent, "Else", "", false))
+    elseif line.kind == "for" then
+      blocks:insert(make_algorithm_paragraph(line.indent, "For", line.text .. " do", false))
+    elseif line.kind == "while" then
+      blocks:insert(make_algorithm_paragraph(line.indent, "While", line.text .. " do", false))
+    elseif line.kind == "if" then
+      blocks:insert(make_algorithm_paragraph(line.indent, "If", line.text .. " then", false))
+    elseif line.kind == "return" then
+      blocks:insert(make_algorithm_paragraph(line.indent, "Return", line.text, false))
+    elseif line.kind == "end" then
+      blocks:insert(make_algorithm_paragraph(line.indent, line.text, "", false))
+    else
+      blocks:insert(make_algorithm_paragraph(line.indent, "", line.text, false))
+    end
+  end
+
+  blocks:insert(pandoc.Para({ pandoc.Str(algorithm_end_marker) }))
+  return blocks
+end
+
+local function parse_table_blocks()
+  local input_file = PANDOC_STATE.input_files[1]
+  local source = read_file(input_file)
+  if not source then
+    return
+  end
+
+  local begin_prefix = "\\begin{table"
+  local index = 1
+  while true do
+    local start_pos = source:find(begin_prefix, index, true)
+    if not start_pos then
+      break
+    end
+
+    local after_index = start_pos + #begin_prefix
+    local after_table = source:sub(after_index, after_index)
+    if after_table ~= "}" and after_table ~= "*" then
+      index = start_pos + 1
+      goto continue_table
+    end
+
+    local is_star = after_table == "*"
+    local closing_char_index = is_star and (after_index + 1) or after_index
+    if source:sub(closing_char_index, closing_char_index) ~= "}" then
+      index = start_pos + 1
+      goto continue_table
+    end
+
+    local end_token = is_star and "\\end{table*}" or "\\end{table}"
+    local end_pos = source:find(end_token, closing_char_index, true)
+    if not end_pos then
+      break
+    end
+
+    local block = source:sub(start_pos, end_pos + #end_token - 1)
+    table_entries[#table_entries + 1] = {
+      label = trim(block:match("\\label%s*{([^}]+)}") or ""),
+      caption = trim(block:match("\\caption%s*{([^}]*)}") or "")
+    }
+
+    index = end_pos + #end_token
+    ::continue_table::
+  end
+end
+
+local function parse_algorithm_lines(block)
+  local algorithmic_body = block:match("\\begin%s*{algorithmic}%s*%b[]%s*(.-)\\end%s*{algorithmic}")
+  if not algorithmic_body then
+    algorithmic_body = block:match("\\begin%s*{algorithmic}%s*(.-)\\end%s*{algorithmic}")
+  end
+  if not algorithmic_body then
+    return {}
+  end
+
+  local lines = {}
+  local indent = 0
+
+  for raw_line in algorithmic_body:gmatch("[^\r\n]+") do
+    local line = trim(raw_line:gsub("\\label%s*{[^}]+}", ""))
+    if line ~= "" then
+      local require_text = line:match("^\\Require%s*(.*)$")
+      local ensure_text = line:match("^\\Ensure%s*(.*)$")
+      local for_text = line:match("^\\For%s*{(.*)}%s*$")
+      local while_text = line:match("^\\While%s*{(.*)}%s*$")
+      local if_text = line:match("^\\If%s*{(.*)}%s*$")
+      local elseif_text = line:match("^\\ElsIf%s*{(.*)}%s*$") or line:match("^\\ElseIf%s*{(.*)}%s*$")
+      local is_else = line:match("^\\Else%s*$")
+      local is_end_for = line:match("^\\EndFor%s*$")
+      local is_end_while = line:match("^\\EndWhile%s*$")
+      local is_end_if = line:match("^\\EndIf%s*$")
+      local state_text = line:match("^\\State%s*(.*)$")
+
+      if require_text then
+        lines[#lines + 1] = { kind = "input", indent = 0, text = trim(require_text) }
+      elseif ensure_text then
+        lines[#lines + 1] = { kind = "output", indent = 0, text = trim(ensure_text) }
+      elseif for_text then
+        lines[#lines + 1] = { kind = "for", indent = indent, text = trim(for_text) }
+        indent = indent + 1
+      elseif while_text then
+        lines[#lines + 1] = { kind = "while", indent = indent, text = trim(while_text) }
+        indent = indent + 1
+      elseif if_text then
+        lines[#lines + 1] = { kind = "if", indent = indent, text = trim(if_text) }
+        indent = indent + 1
+      elseif elseif_text then
+        indent = math.max(indent - 1, 0)
+        lines[#lines + 1] = { kind = "elseif", indent = indent, text = trim(elseif_text) }
+        indent = indent + 1
+      elseif is_else then
+        indent = math.max(indent - 1, 0)
+        lines[#lines + 1] = { kind = "else", indent = indent, text = "" }
+        indent = indent + 1
+      elseif is_end_for then
+        indent = math.max(indent - 1, 0)
+        lines[#lines + 1] = { kind = "end", indent = indent, text = "End for" }
+      elseif is_end_while then
+        indent = math.max(indent - 1, 0)
+        lines[#lines + 1] = { kind = "end", indent = indent, text = "End while" }
+      elseif is_end_if then
+        indent = math.max(indent - 1, 0)
+        lines[#lines + 1] = { kind = "end", indent = indent, text = "End if" }
+      elseif state_text then
+        local cleaned_state = trim(state_text)
+        local return_text = cleaned_state:match("^\\Return%s*(.*)$")
+        if return_text then
+          lines[#lines + 1] = { kind = "return", indent = indent, text = trim(return_text) }
+        elseif cleaned_state ~= "" then
+          lines[#lines + 1] = { kind = "state", indent = indent, text = cleaned_state }
+        end
+      end
+    end
+  end
+
+  return lines
+end
+
 local function parse_algorithm_blocks()
   local input_file = PANDOC_STATE.input_files[1]
   local source = read_file(input_file)
@@ -297,15 +502,47 @@ local function parse_algorithm_blocks()
     return
   end
 
-  for block in source:gmatch("\\begin%s*{algorithm}.-\\end%s*{algorithm}") do
+  local begin_prefix = "\\begin{algorithm"
+  local index = 1
+  while true do
+    local start_pos = source:find(begin_prefix, index, true)
+    if not start_pos then
+      break
+    end
+
+    local after_index = start_pos + #begin_prefix
+    local after_algorithm = source:sub(after_index, after_index)
+    if after_algorithm ~= "}" and after_algorithm ~= "*" then
+      index = start_pos + 1
+      goto continue
+    end
+
+    local is_star = after_algorithm == "*"
+    local closing_char_index = is_star and (after_index + 1) or after_index
+    if source:sub(closing_char_index, closing_char_index) ~= "}" then
+      index = start_pos + 1
+      goto continue
+    end
+
+    local end_token = is_star and "\\end{algorithm*}" or "\\end{algorithm}"
+    local end_pos = source:find(end_token, start_pos, true)
+    if not end_pos then
+      break
+    end
+
+    local block = source:sub(start_pos, end_pos + #end_token - 1)
     local label = block:match("\\label%s*{([^}]+)}")
     local caption = block:match("\\caption%s*{([^}]*)}")
     if label then
       algorithm_entries[#algorithm_entries + 1] = {
         label = trim(label),
-        caption = latex_to_text(caption or "")
+        caption = latex_to_text(caption or ""),
+        lines = parse_algorithm_lines(block)
       }
     end
+
+    index = end_pos + #end_token
+    ::continue::
   end
 end
 
@@ -331,6 +568,36 @@ local function prepend_caption(caption, prefix)
     caption.long[1] = pandoc.Para(new_inlines)
   end
   return caption
+end
+
+local function ensure_table_caption(table_block, prefix, fallback_caption)
+  if not table_block.caption then
+    return table_block
+  end
+
+  if table_block.caption.long and #table_block.caption.long > 0 then
+    table_block.caption = prepend_caption(table_block.caption, prefix)
+    return table_block
+  end
+
+  if fallback_caption and fallback_caption ~= "" then
+    local new_inlines = pandoc.List()
+    new_inlines:insert(pandoc.Str(prefix))
+    append_inlines(new_inlines, latex_snippet_to_inlines(fallback_caption))
+    table_block.caption.long = pandoc.List()
+    table_block.caption.long:insert(pandoc.Plain(new_inlines))
+  end
+
+  return table_block
+end
+
+local function first_block_index(blocks, block_type)
+  for index, block in ipairs(blocks) do
+    if block.t == block_type then
+      return index, block
+    end
+  end
+  return nil, nil
 end
 
 local function clean_equation_math(text)
@@ -397,22 +664,37 @@ local function register_equation(para)
 end
 
 local function register_div(div)
-  if div.identifier and div.identifier ~= "" and #div.content == 1 and div.content[1].t == "Table" then
+  local table_block_index, table_block = first_block_index(div.content, "Table")
+  if table_block_index then
     table_counter = table_counter + 1
-    label_map[div.identifier] = {
-      kind = "table",
-      number = tostring(table_counter)
-    }
+    local table_entry = table_entries[table_counter] or {}
+    local label = trim(div.identifier or "")
+    if label == "" and table_block.identifier and table_block.identifier ~= "" then
+      label = trim(table_block.identifier)
+    end
+    if label == "" and table_entry.label and table_entry.label ~= "" then
+      label = table_entry.label
+    end
 
-    local table_block = div.content[1]
-    table_block.caption = prepend_caption(table_block.caption, "Table " .. table_counter .. ": ")
-    div.content[1] = table_block
+    if label ~= "" then
+      label_map[label] = {
+        kind = "table",
+        number = tostring(table_counter)
+      }
+      div.identifier = label
+    end
+
+    div.content[table_block_index] = ensure_table_caption(
+      table_block,
+      "Table " .. table_counter .. ": ",
+      table_entry.caption
+    )
     return div
   end
 
   local is_algorithm = false
   for _, class_name in ipairs(div.classes) do
-    if class_name == "algorithm" then
+    if class_name == "algorithm" or class_name == "algorithm*" then
       is_algorithm = true
       break
     end
@@ -428,18 +710,23 @@ local function register_div(div)
       }
     end
 
+    if entry.lines and #entry.lines > 0 then
+      return build_algorithm_blocks(entry, algorithm_counter)
+    end
+
     local caption_text = "Algorithm " .. algorithm_counter
     if entry.caption and entry.caption ~= "" then
-      caption_text = caption_text .. ": " .. entry.caption
+      caption_text = caption_text .. ". " .. entry.caption
     end
 
     local new_content = pandoc.List()
-    new_content:insert(pandoc.Para({ pandoc.Str(caption_text) }))
+    new_content:insert(pandoc.Para({ pandoc.Str(algorithm_start_marker) }))
+    new_content:insert(pandoc.Para({ pandoc.Strong({ pandoc.Str(caption_text) }) }))
     for _, block in ipairs(div.content) do
       new_content:insert(block)
     end
-    div.content = new_content
-    return div
+    new_content:insert(pandoc.Para({ pandoc.Str(algorithm_end_marker) }))
+    return new_content
   end
 
   return div
@@ -468,6 +755,43 @@ local function build_simple_inlines(parts)
   return inlines
 end
 
+local function reference_name(kind, count, uppercase)
+  local names = {
+    section = { singular = "section", plural = "sections" },
+    figure = { singular = "figure", plural = "figures" },
+    table = { singular = "table", plural = "tables" },
+    algorithm = { singular = "algorithm", plural = "algorithms" },
+    equation = { singular = "equation", plural = "equations" }
+  }
+
+  local entry = names[kind]
+  if not entry then
+    return nil
+  end
+
+  local value = count == 1 and entry.singular or entry.plural
+  if uppercase then
+    return value:gsub("^%l", string.upper)
+  end
+  return value
+end
+
+local function collect_reference_numbers(labels, kind, wrap_equations)
+  local rendered = {}
+  for _, label in ipairs(labels) do
+    local info = label_map[label]
+    if info and info.kind == kind and info.number then
+      local number = tostring(info.number)
+      if wrap_equations then
+        rendered[#rendered + 1] = "(" .. number .. ")"
+      else
+        rendered[#rendered + 1] = number
+      end
+    end
+  end
+  return rendered
+end
+
 local function render_reference(link)
   local reference = link.attributes["reference"]
   if not reference then
@@ -484,32 +808,39 @@ local function render_reference(link)
     return nil
   end
 
+  local reference_type = link.attributes["reference-type"] or "ref"
+
   if first.kind == "equation" then
-    local rendered = {}
-    for _, label in ipairs(labels) do
-      local info = label_map[label]
-      if info then
-        rendered[#rendered + 1] = "(" .. tostring(info.number) .. ")"
-      end
+    local rendered = collect_reference_numbers(labels, "equation", true)
+    if #rendered == 0 then
+      return nil
     end
-    if #rendered > 0 then
+
+    if reference_type == "ref+Label" or reference_type == "ref+label" then
+      local name = reference_name("equation", #rendered, reference_type == "ref+Label")
+      return build_simple_inlines({ name, " ", table.concat(rendered, ", ") })
+    end
+
+    if reference_type == "eqref" then
       return build_simple_inlines({ table.concat(rendered, ", ") })
     end
-  elseif first.kind == "section" then
-    return build_simple_inlines({ "Section", " ", tostring(first.number) })
-  elseif first.kind == "algorithm" then
-    return build_simple_inlines({ "Algorithm", " ", tostring(first.number) })
-  elseif first.kind == "table" or first.kind == "figure" then
-    local rendered = {}
-    for _, label in ipairs(labels) do
-      local info = label_map[label]
-      if info and info.number then
-        rendered[#rendered + 1] = tostring(info.number)
-      end
+
+    local bare_numbers = collect_reference_numbers(labels, "equation", false)
+    if #bare_numbers > 0 then
+      return build_simple_inlines({ table.concat(bare_numbers, ", ") })
     end
-    if #rendered > 0 then
-      return build_simple_inlines({ table.concat(rendered, ", ") })
+  elseif first.kind == "section" or first.kind == "algorithm" or first.kind == "table" or first.kind == "figure" then
+    local rendered = collect_reference_numbers(labels, first.kind, false)
+    if #rendered == 0 then
+      return nil
     end
+
+    if reference_type == "ref+Label" or reference_type == "ref+label" then
+      local name = reference_name(first.kind, #rendered, reference_type == "ref+Label")
+      return build_simple_inlines({ name, " ", table.concat(rendered, ", ") })
+    end
+
+    return build_simple_inlines({ table.concat(rendered, ", ") })
   end
 
   return nil
@@ -517,6 +848,7 @@ end
 
 function Pandoc(doc)
   load_bibliography(doc.meta)
+  parse_table_blocks()
   parse_algorithm_blocks()
 
   doc = doc:walk({

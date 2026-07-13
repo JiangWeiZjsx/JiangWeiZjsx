@@ -11,11 +11,11 @@
 ### Academic Achievements (学术归档)
 
 * 📜 **[Publications (论文)](./academic.md)** - Selected research papers on Fault Diagnosis & Emergency Management.
-* 💻 **[Research Codebase (代码)](https://github.com/JiangWeiZjsx/academic-codebase)** - Official implementations and reproducible code for my published works.
+* 💻 **[Research Codebase (代码)](./Code/README.md)** - Official implementations and reproducible code for my published works.
 
 ### Lab Notes (科研笔记)
 
-* 📓 **[Lab Notes (笔记)](./lab-notes/lab-notes.md)** - Daily research logs, literature reviews, and technical insights.
+* 📓 **[Lab Notes (笔记)](./Notes/)** - Daily research logs, literature reviews, and technical insights.
 
 ### Main Publications (主要代表作)
 
@@ -29,6 +29,8 @@
 * ⛽ Oil & Gas (油气)
 1. Liu Huanying, Yulin Liu, Changhao Wang, Yanling Song, **Wei Jiang**, Cuicui Li, Shouxin Zhang, and Bingyuan Hong. 2023. ‘Natural Gas Demand Forecasting Model Based on LASSO and Polynomial Models and Its Application: A Case Study of China’. *Energies* 16(11): 4268. doi:10.3390/en16114268.
 2. Li Guiliang, Bingyuan Hong, Haoran Hu, Bowen Shao, **Wei Jiang**, Cuicui Li, and Jian Guo. 2022. ‘Risk Management of Island Petrochemical Park: Accident Early Warning Model Based on Artificial Neural Network’. *Energies* 15(9): 3278. doi:10.3390/en15093278.
+
+[更多成果...](./Profile/)
 
 
 ### Research Workflow (科研工作流)

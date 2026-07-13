@@ -172,13 +172,115 @@ function Convert-AddedMarkupToMarkers {
     return $builder.ToString()
 }
 
+function Get-BalancedGroup {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Text,
+
+        [Parameter(Mandatory = $true)]
+        [int]$StartIndex,
+
+        [Parameter(Mandatory = $true)]
+        [char]$OpenChar,
+
+        [Parameter(Mandatory = $true)]
+        [char]$CloseChar
+    )
+
+    if ($StartIndex -ge $Text.Length -or $Text[$StartIndex] -ne $OpenChar) {
+        return $null
+    }
+
+    $builder = New-Object System.Text.StringBuilder
+    $depth = 0
+
+    for ($index = $StartIndex; $index -lt $Text.Length; $index++) {
+        $char = $Text[$index]
+        if ($char -eq $OpenChar) {
+            $depth++
+            if ($depth -gt 1) {
+                [void]$builder.Append($char)
+            }
+            continue
+        }
+
+        if ($char -eq $CloseChar) {
+            $depth--
+            if ($depth -eq 0) {
+                return @{
+                    Value = $builder.ToString()
+                    EndIndex = $index
+                }
+            }
+
+            [void]$builder.Append($char)
+            continue
+        }
+
+        [void]$builder.Append($char)
+    }
+
+    return $null
+}
+
+function Simplify-MakecellCommands {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Text
+    )
+
+    $builder = New-Object System.Text.StringBuilder
+    $token = '\makecell'
+    $index = 0
+
+    while ($index -lt $Text.Length) {
+        if ($index + $token.Length -le $Text.Length -and $Text.Substring($index, $token.Length) -eq $token) {
+            $cursor = $index + $token.Length
+
+            while ($cursor -lt $Text.Length -and [char]::IsWhiteSpace($Text[$cursor])) {
+                $cursor++
+            }
+
+            if ($cursor -lt $Text.Length -and $Text[$cursor] -eq '[') {
+                $optionGroup = Get-BalancedGroup -Text $Text -StartIndex $cursor -OpenChar '[' -CloseChar ']'
+                if ($null -eq $optionGroup) {
+                    [void]$builder.Append($Text[$index])
+                    $index++
+                    continue
+                }
+
+                $cursor = $optionGroup.EndIndex + 1
+                while ($cursor -lt $Text.Length -and [char]::IsWhiteSpace($Text[$cursor])) {
+                    $cursor++
+                }
+            }
+
+            if ($cursor -lt $Text.Length -and $Text[$cursor] -eq '{') {
+                $contentGroup = Get-BalancedGroup -Text $Text -StartIndex $cursor -OpenChar '{' -CloseChar '}'
+                if ($null -ne $contentGroup) {
+                    $content = [regex]::Replace($contentGroup.Value, '\\\\\s*', ' ')
+                    $content = [regex]::Replace($content, '\s+', ' ').Trim()
+                    [void]$builder.Append($content)
+                    $index = $contentGroup.EndIndex + 1
+                    continue
+                }
+            }
+        }
+
+        [void]$builder.Append($Text[$index])
+        $index++
+    }
+
+    return $builder.ToString()
+}
+
 function Simplify-RuntimeStatisticsTable {
     param(
         [Parameter(Mandatory = $true)]
         [string]$Text
     )
 
-    $runtimeTablePattern = '(?s)\\begin\{table\}\[H\]\s*\\centering\s*\\caption\{Comparison of Runtime Components under Different Scenarios\.\}\s*\\label\{tab:runtime_stat\}.*?\\end\{table\}'
+    $runtimeTablePattern = '(?s)\\begin\{table\}\[[^\]]*\]\s*\\centering\s*\\caption\{Comparison of Runtime Components under Different Scenarios\.\}\s*\\label\{tab:runtime_stat\}.*?\\end\{table\}'
     $runtimeTableReplacement = @'
 \begin{table}[H]
     \centering
@@ -214,6 +316,7 @@ function Apply-ExportOnlyPatches {
 
     $patched = $Text.Replace("../figures/framework/TE_01.pdf", "../figures/framework/TE_01.png")
     $patched = Convert-AddedMarkupToMarkers -Text $patched
+    $patched = Simplify-MakecellCommands -Text $patched
     $patched = Simplify-RuntimeStatisticsTable -Text $patched
     return $patched
 }

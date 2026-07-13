@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import re
 import sys
 import zipfile
 from pathlib import Path
@@ -15,6 +16,10 @@ NS = {
 XML_SPACE = "{http://www.w3.org/XML/1998/namespace}space"
 START_MARKER = "CODXADDSTART"
 END_MARKER = "CODXADDEND"
+ALGORITHM_START_MARKER = "CODXALGSTART"
+ALGORITHM_END_MARKER = "CODXALGEND"
+SYMBOL_MATH_CHARS = set(" ★☆✓✔✗✘✕✖×")
+ALGORITHM_TITLE_RE = re.compile(r"^Algorithm\s+\d+([.:]|\s)")
 
 for prefix, uri in NS.items():
     ET.register_namespace(prefix, uri)
@@ -42,6 +47,14 @@ def paragraph_style(paragraph: ET.Element) -> str | None:
     return style.attrib.get(qn("w", "val"))
 
 
+def set_paragraph_style(paragraph: ET.Element, style: str) -> None:
+    p_pr = ensure_child(paragraph, qn("w", "pPr"))
+    p_style = p_pr.find("w:pStyle", NS)
+    if p_style is None:
+        p_style = ET.SubElement(p_pr, qn("w", "pStyle"))
+    p_style.attrib[qn("w", "val")] = style
+
+
 def paragraph_text(paragraph: ET.Element) -> str:
     parts: list[str] = []
     for text_node in paragraph.findall(".//w:t", NS):
@@ -56,6 +69,20 @@ def make_run(text: str) -> ET.Element:
     text_node = ET.SubElement(run, qn("w", "t"))
     text_node.attrib[XML_SPACE] = "preserve"
     text_node.text = text
+    return run
+
+
+def make_symbol_run(text: str) -> ET.Element:
+    run = make_run(text)
+    r_pr = ensure_child(run, qn("w", "rPr"))
+    r_fonts = r_pr.find("w:rFonts", NS)
+    if r_fonts is None:
+        r_fonts = ET.SubElement(r_pr, qn("w", "rFonts"))
+
+    # Use a symbol-capable font so Word renders these markers reliably.
+    for attr in ("ascii", "hAnsi", "eastAsia", "cs"):
+        r_fonts.attrib[qn("w", attr)] = "Segoe UI Symbol"
+
     return run
 
 
@@ -91,6 +118,30 @@ def apply_red_to_math(math_element: ET.Element) -> None:
         color.attrib[qn("w", "val")] = "FF0000"
 
 
+def math_text(math_element: ET.Element) -> str:
+    parts: list[str] = []
+    for text_node in math_element.findall(".//m:t", NS):
+        parts.append(text_node.text or "")
+    return "".join(parts)
+
+
+def is_symbol_only_math(math_element: ET.Element) -> bool:
+    text = math_text(math_element)
+    return bool(text.strip()) and all(char in SYMBOL_MATH_CHARS for char in text)
+
+
+def replace_symbol_only_math(paragraph: ET.Element) -> None:
+    children = list(paragraph)
+    for index, child in enumerate(children):
+        if child.tag != qn("m", "oMath"):
+            continue
+        if not is_symbol_only_math(child):
+            continue
+
+        paragraph.remove(child)
+        paragraph.insert(index, make_symbol_run(math_text(child)))
+
+
 def prepend_caption_prefix(paragraph: ET.Element, prefix: str) -> None:
     p_pr = paragraph.find("w:pPr", NS)
     insert_at = 1 if p_pr is not None else 0
@@ -103,6 +154,16 @@ def set_paragraph_alignment(paragraph: ET.Element, align: str) -> None:
     if jc is None:
         jc = ET.SubElement(p_pr, qn("w", "jc"))
     jc.attrib[qn("w", "val")] = align
+
+
+def center_document_title(body: ET.Element) -> None:
+    for child in body:
+        if child.tag != qn("w", "p"):
+            continue
+        if not paragraph_text(child):
+            continue
+        set_paragraph_alignment(child, "center")
+        return
 
 
 def clear_paragraph_indentation(paragraph: ET.Element) -> None:
@@ -168,6 +229,22 @@ def add_border(tc_pr: ET.Element, edge: str, size: str) -> None:
     border.attrib[qn("w", "color")] = "000000"
 
 
+def set_border_box(parent: ET.Element, border_tag: str, size: str) -> None:
+    borders = parent.find(border_tag, NS)
+    if borders is None:
+        borders = ET.SubElement(parent, qn("w", border_tag.split(":")[1]))
+    else:
+        for child in list(borders):
+            borders.remove(child)
+
+    for edge in ("top", "left", "bottom", "right"):
+        border = ET.SubElement(borders, qn("w", edge))
+        border.attrib[qn("w", "val")] = "single"
+        border.attrib[qn("w", "sz")] = size
+        border.attrib[qn("w", "space")] = "0"
+        border.attrib[qn("w", "color")] = "000000"
+
+
 def apply_three_line_style(table: ET.Element) -> None:
     rows = table.findall("w:tr", NS)
     if not rows:
@@ -197,6 +274,10 @@ def center_table(table: ET.Element) -> None:
     if jc is None:
         jc = ET.SubElement(tbl_pr, qn("w", "jc"))
     jc.attrib[qn("w", "val")] = "center"
+
+
+def is_algorithm_title(text: str) -> bool:
+    return bool(ALGORITHM_TITLE_RE.match(text.strip()))
 
 
 def get_usable_page_width(body: ET.Element) -> int:
@@ -340,6 +421,94 @@ def fit_table_to_page(table: ET.Element, usable_width: int) -> None:
                 set_cell_width(cell, widths[index])
 
 
+def make_algorithm_table(paragraphs: list[ET.Element], usable_width: int) -> ET.Element:
+    table = ET.Element(qn("w", "tbl"))
+
+    tbl_pr = ET.SubElement(table, qn("w", "tblPr"))
+    tbl_w = ET.SubElement(tbl_pr, qn("w", "tblW"))
+    tbl_w.attrib[qn("w", "w")] = str(usable_width)
+    tbl_w.attrib[qn("w", "type")] = "dxa"
+
+    tbl_layout = ET.SubElement(tbl_pr, qn("w", "tblLayout"))
+    tbl_layout.attrib[qn("w", "type")] = "fixed"
+    set_border_box(tbl_pr, "w:tblBorders", "8")
+
+    tbl_grid = ET.SubElement(table, qn("w", "tblGrid"))
+    grid_col = ET.SubElement(tbl_grid, qn("w", "gridCol"))
+    grid_col.attrib[qn("w", "w")] = str(usable_width)
+
+    row = ET.SubElement(table, qn("w", "tr"))
+    cell = ET.SubElement(row, qn("w", "tc"))
+    tc_pr = ET.SubElement(cell, qn("w", "tcPr"))
+    tc_w = ET.SubElement(tc_pr, qn("w", "tcW"))
+    tc_w.attrib[qn("w", "w")] = str(usable_width)
+    tc_w.attrib[qn("w", "type")] = "dxa"
+    v_align = ET.SubElement(tc_pr, qn("w", "vAlign"))
+    v_align.attrib[qn("w", "val")] = "top"
+    set_border_box(tc_pr, "w:tcBorders", "8")
+
+    if not paragraphs:
+        cell.append(make_empty_paragraph())
+    else:
+        for paragraph in paragraphs:
+            cell.append(copy.deepcopy(paragraph))
+
+    center_table(table)
+    return table
+
+
+def make_algorithm_caption(paragraph: ET.Element) -> ET.Element:
+    caption = copy.deepcopy(paragraph)
+    set_paragraph_style(caption, "TableCaption")
+    set_paragraph_alignment(caption, "center")
+    return caption
+
+
+def convert_algorithm_blocks(body: ET.Element, usable_width: int) -> None:
+    while True:
+        children = list(body)
+        start_index = None
+        end_index = None
+
+        for index, child in enumerate(children):
+            if child.tag == qn("w", "p") and paragraph_text(child) == ALGORITHM_START_MARKER:
+                start_index = index
+                break
+
+        if start_index is None:
+            return
+
+        for index in range(start_index + 1, len(children)):
+            child = children[index]
+            if child.tag == qn("w", "p") and paragraph_text(child) == ALGORITHM_END_MARKER:
+                end_index = index
+                break
+
+        if end_index is None:
+            return
+
+        algorithm_paragraphs: list[ET.Element] = []
+        for child in children[start_index + 1:end_index]:
+            if child.tag == qn("w", "p"):
+                text = paragraph_text(child)
+                if algorithm_paragraphs or is_algorithm_title(text):
+                    algorithm_paragraphs.append(child)
+
+        if not algorithm_paragraphs:
+            for remove_index in range(end_index, start_index - 1, -1):
+                body.remove(children[remove_index])
+            continue
+
+        title_paragraph = algorithm_paragraphs[0]
+        body_paragraphs = algorithm_paragraphs[1:]
+        algorithm_caption = make_algorithm_caption(title_paragraph)
+        algorithm_table = make_algorithm_table(body_paragraphs, usable_width)
+        for remove_index in range(end_index, start_index - 1, -1):
+            body.remove(children[remove_index])
+        body.insert(start_index, algorithm_caption)
+        body.insert(start_index + 1, algorithm_table)
+
+
 def set_cell_paragraph_text(cell: ET.Element, text: str) -> None:
     for child in list(cell):
         if child.tag != qn("w", "tcPr"):
@@ -454,8 +623,10 @@ def postprocess_document_xml(document_xml: bytes) -> bytes:
         return document_xml
 
     usable_width = get_usable_page_width(body)
+    center_document_title(body)
 
     for paragraph in root.findall(".//w:p", NS):
+        replace_symbol_only_math(paragraph)
         color_added_segments(paragraph)
 
     figure_number = 0
@@ -473,6 +644,8 @@ def postprocess_document_xml(document_xml: bytes) -> bytes:
         normalize_table_text(table)
         fit_table_to_page(table, usable_width)
         apply_three_line_style(table)
+
+    convert_algorithm_blocks(body, usable_width)
 
     equation_number = 0
     children = list(body)
